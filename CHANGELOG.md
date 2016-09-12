@@ -4,6 +4,10 @@ FEATURES:
 
 * Added a new `/v1/txn` state store transaction API that allows for atomic
   updates to and fetches from multiple entries in the key/value store. [GH-2028]
+* Added a full replication capability for ACLs. Non-ACL datacenters can now
+  replicate the complete ACL set locally to their state store and fall back to
+  that if there's an outage. Additionally, this provides a good way to make a
+  backup ACL datacenter, or to migrate the ACL datacenter to a different one. [GH-2237]
 * Script checks now support an optional `timeout` parameter. [GH-1762]
 * Reap time for failed nodes is now configurable via new `reconnect_timeout` and
   `reconnect_timeout_wan` config options ([use with caution](https://www.consul.io/docs/agent/options.html#reconnect_timeout)). [GH-1935]
@@ -23,21 +27,21 @@ FEATURES:
 * Implemented a new set of feedback controls for the gossip layer that help
   prevent degraded nodes that can't meet the soft real-time requirements from
   erroneously causing `serfHealth` flapping in other, healthy nodes. [GH-2101]
-
-BACKWARDS INCOMPATIBILITIES:
-
-* `skip_leave_on_interrupt`'s default behavior is now dependent on whether or
-  not the agent is acting as a server or client.  When Consul is started as a
-  server the default is `true` and `false` when a client. [GH-1909]
-* HTTP check output is truncated to 4k, similar to script check output. [GH-1952]
-
-IMPROVEMENTS:
-
-* Consul will now retry RPC calls that result in "no leader" errors for up to
-  5 seconds. This allows agents to ride out leader elections with a delayed
-  response vs. an error. [GH-2175]
-* Joins based on a DNS lookup will use TCP and attempt to join with the full
-  list of returned addresses. [GH-2101]
+* Upgraded to "stage one" of the v2 HashiCorp Raft library. This version offers
+  improved handling of cluster membership changes and recovery after a loss of
+  quorum. This version also provides a foundation for new features that will
+  appear in future Consul versions once the remainder of the v2 library is
+  complete. [GH-2222]
+* Added new `consul operator` command, HTTP endpoint, and associated ACL to
+  allow Consul operators to view and update the Raft configuration. This allows
+  for a stale server to be removed without requiring downtime and peers.json
+  recovery file use. [GH-2312]
+* Extended the [`translate_wan_addrs`](https://www.consul.io/docs/agent/options.html#translate_wan_addrs)
+  config option to also translate node addresses in HTTP responses, making it easy
+  to use this feature from non-DNS clients. [GH-2118]
+* Added a new `deregister_critical_service_after` timeout field for health checks
+  which will cause the service associated with that check to get deregistered if
+  the check is critical for longer than the timeout. [GH-679]
 * Added a new network tomogroaphy visualization to the UI. [GH-2046]
 * Consul agents will now periodically reconnect to available Consul servers
   in order to redistribute their RPC query load.  Consul clients will, by
@@ -48,13 +52,70 @@ IMPROVEMENTS:
   second per Consul server as a result of rebalancing).  Clusters in stable
   environments who use `allow_stale` should see a more even distribution of
   query load across all of their Consul servers. [GH-1743]
+
+BACKWARDS INCOMPATIBILITIES:
+
+* The default behavior of `leave_on_terminate` and `skip_leave_on_interrupt`
+  is now dependent on whether or not the agent is acting as a server or client.
+  When Consul is started as a server the defaults for these are `false` and
+  `true`, respectively, which means that you have to explicitly configure a
+  server to leave the cluster. When Consul is started as a client the defaults
+  are the opposite, which means by default, clients will leave the cluster if
+  shutdown or interrupted. [GH-1909] [GH-2320]
+* `allow_stale` for DNS queries now defaults to `true`, allowing for better
+  utilization of available Consul servers and higher throughput at the exponse of
+  weaker consistency. [GH-2315]
+* HTTP check output is truncated to 4k, similar to script check output. [GH-1952]
+* Consul's Go API client will now send ACL tokens using HTTP headers instead of
+  query parameters, requiring Consul 0.6.0 or later. [GH-2233]
+* Removed support for protocol version 1, so Consul 0.7 is no longer compatible
+  with Consul versions prior to 0.3. [GH-2259]
+* The Raft peers information in `consul info` has changed format. [GH-2222]
+* The extended [`translate_wan_addrs`](https://www.consul.io/docs/agent/options.html#translate_wan_addrs)
+  behavior from [GH-2118] that translates addresses in HTTP responses could break
+  clients that are expecting local addresses. A new `X-Consul-Translate-Addresses`
+  header was added to allow clients to detect if translation is enabled for HTTP
+  responses, and a "lan" tag was added to `TaggedAddresses` for clients that need
+  the local address regardless of translation. [GH-2280]
+* The behavior of the `peers.json` file is different in this version of Consul:
+  this file won't normally be present and is used only during outage recovery. Be
+  sure to read [Outage Recovery Guide](https://www.consul.io/docs/guides/outage.html)
+  for details. [GH-2222]
+* Consul's default Raft timing is now set to work more reliably on lower-performance servers,
+  which allows for small clusters to use lower cost compute at the expense of reduced
+  performance for failed leader detection and leader elections. You will need to configure
+  Consul to get the same performance as before. See the new [Server Performance](https://www.consul.io/docs/guides/performance.html) guide for more
+  details. [GH-2303]
+
+IMPROVEMENTS:
+
+* Consul will now retry RPC calls that result in "no leader" errors for up to
+  5 seconds. This allows agents to ride out leader elections with a delayed
+  response vs. an error. [GH-2175]
+* Joins based on a DNS lookup will use TCP and attempt to join with the full
+  list of returned addresses. [GH-2101]
 * Consul will now refuse to start with a helpful message if the same UNIX
   socket is used for more than one listening endpoint. [GH-1910]
 * Removed an obsolete warning message when Consul starts on Windows. [GH-1920]
 * Defaults bind address to 127.0.0.1 when running in `-dev` mode. [GH-1878]
-* Builds Consul releases with Go 1.6.1. [GH-1948]
 * HTTP health checks limit saved output to 4K to avoid performance issues. [GH-1952]
 * Added version information to the log when Consul starts up. [GH-1404]
+* Added timing metrics for HTTP requests. [GH-2256]
+* Updated all vendored dependencies. [GH-2258]
+* Consul releases are now built with Go 1.6.3. [GH-2260]
+* Added a `-stale` mode for watchers to allow them to pull data from any Consul
+  server, not just the leader. [GH-2045] [GH-917]
+* Consul now compresses all DNS responses by default. This prevents issues when
+  recursing records that were originally compressed, where Consul would somtimes
+  generate an invalid, uncompressed response that was too large. [GH-2266]
+* Servers will now abort bootstrapping if they detect an existing cluster with
+  configured Raft peers. This will help prevent spurious leader elections when
+  starting new nodes with `bootstrap_expect` enabled. [GH-2319]
+* Added a new `recursor_timeout` configuration option to set the timeout for
+  Consul's internal DNS client that's used for recursing queries to upstream DNS
+  servers. [GH-2321]
+* Added a new `-dns-port` command line option so this can be set without a config
+  file. [GH-2263]
 
 BUG FIXES:
 
@@ -67,7 +128,19 @@ BUG FIXES:
   status doesn't change after the Consul agent starts. [GH-1934]
 * External services can now be registered with ACL tokens. [GH-1738]
 * Upgraded Bolt DB to v1.2.1 to fix an issue on Windows where Consul would sometimes
-  fail to start due to open user-mapped sections. [GH-2203].
+  fail to start due to open user-mapped sections. [GH-2203]
+* Fixed an issue where large events affecting many nodes could cause infinite intent
+  rebroadcasts, leading to many log messages about intent queue overflows. [GH-1062]
+* Gossip encryption keys are now validated before being made persistent in the
+  keyring, avoiding delayed feedback at runtime. [GH-1299]
+* Fixed an issue where DNS requests for SRV records could be incorrectly trimmed,
+  resulting in an ADDITIONAL section that was out of sync with the ANSWER. [GH-1931]
+* Fixed two issues where DNS requests for SRV records on a prepared query that failed
+  over would report the wrong domain and fail to translate addresses. [GH-2218] [GH-2220]
+
+OTHER CHANGES:
+
+* Switched from Godep to govendor. [GH-2252]
 
 ## 0.6.4 (March 16, 2016)
 
@@ -132,6 +205,8 @@ BUG FIXES:
   fallback pings. This affected users with frequent UDP connectivity problems. [GH-1802]
 * Added a fix to trim UDP DNS responses so they don't exceed 512 bytes. [GH-1813]
 * Updated go-dockerclient to fix Docker health checks with Docker 1.10. [GH-1706]
+* Removed fixed height display of nodes and services in UI, leading to broken displays
+  when a node has a lot of services. [GH-2055]
 
 ## 0.6.3 (January 15, 2016)
 

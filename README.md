@@ -25,8 +25,7 @@ Consul provides several key features:
 * **Multi-Datacenter** - Consul is built to be datacenter aware, and can
   support any number of regions without complex configuration.
 
-Consul runs on Linux, Mac OS X, and Windows. It is recommended to run the
-Consul servers only on Linux, however.
+Consul runs on Linux, Mac OS X, FreeBSD, Solaris, and Windows.
 
 ## Quick Start
 
@@ -56,7 +55,7 @@ $ bin/consul
 ...
 ```
 
-*note: `make` will also place a copy of the binary in the first part of your $GOPATH*
+*Note: `make` will also place a copy of the binary in the first part of your `$GOPATH`.*
 
 You can run tests by typing `make test`.
 
@@ -84,19 +83,5 @@ with MinGW.
 
 ## Vendoring
 
-Consul currently uses [Godep](https://github.com/tools/godep) for vendoring. These
-steps can be used to update dependencies in a controlled way.
-
-Start by running a clean golang container:
-
-```docker run -i -t -v `pwd`:/go/src/github.com/hashicorp/consul golang sh```
-
-After that, you'll get a shell inside the container:
-
-1. Run `go get github.com/tools/godep` to install Godep.
-2. Run `cd /go/src/github.com/hashicorp/consul` to change to the Consul repo. Note
-   that we mounted that as a volume above into the `GOPATH`.
-3. Run `godep restore` to update the container with the current state of dependencies
-   based on what's vendored.
-4. Update dependencies as needed.
-5. Run `godep save` and look at the results carefully before committing.
+Consul currently uses [govendor](https://github.com/kardianos/govendor) for
+vendoring.

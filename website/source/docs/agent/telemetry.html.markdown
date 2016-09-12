@@ -129,8 +129,8 @@ These metrics are used to monitor the health of the Consul servers.
     <td>timer</td>
   </tr>
   <tr>
-    <td>`consul.raft.leader.lastContact`</td>
-    <td>This measures the time that a Consul server was last contacted by the leader (will be zero on the leader itself). This is a general indicator of latency in the Raft subsystem, and gives a general indicator of how far behind [stale](/docs/agent/http.html#consistency) queries will be.</td>
+    <td><a name="last-contact"></a>`consul.raft.leader.lastContact`</td>
+    <td>This will only be emitted by the Raft leader and measures the time since the leader was last able to contact the follower nodes when checking its leader lease. It can be used as a measure for how stable the Raft timing is and how close the leader is to timing out its lease.<br><br>The lease timeout is 500 ms times the [`raft_multiplier` configuration](/docs/agent/options.html#raft_multiplier), so this telemetry value should not be getting close to that configured value, otherwise the Raft timing is marginal and might need to be tuned, or more powerful servers might be needed. See the [Server Performance](/docs/guides/performance.html) guide for more details.</td>
     <td>ms</td>
     <td>timer</td>
   </tr>
@@ -174,6 +174,12 @@ These metrics give insight into the health of the cluster as a whole.
   <tr>
     <td>`consul.dns.ptr_query.<agent>`</td>
     <td>This tracks how long it takes to service reverse DNS lookups on the given Consul agent.</td>
+    <td>ms</td>
+    <td>timer</td>
+  </tr>
+  <tr>
+    <td>`consul.http.<verb>.<path>`</td>
+    <td>This tracks how long it takes to service the given HTTP request for the given verb and path. Note that paths do not include details like service or key names, for these an underscore will be present as a placeholder (eg. `consul.http.GET.v1.kv._`)</td>
     <td>ms</td>
     <td>timer</td>
   </tr>

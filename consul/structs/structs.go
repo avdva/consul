@@ -53,7 +53,6 @@ const (
 	// HealthAny is special, and is used as a wild card,
 	// not as a specific state.
 	HealthAny      = "any"
-	HealthUnknown  = "unknown"
 	HealthPassing  = "passing"
 	HealthWarning  = "warning"
 	HealthCritical = "critical"
@@ -260,10 +259,15 @@ type Nodes []*Node
 // Maps service name to available tags
 type Services map[string][]string
 
-// ServiceNode represents a node that is part of a service
+// ServiceNode represents a node that is part of a service. Address and
+// TaggedAddresses are node-related fields that are always empty in the state
+// store and are filled in on the way out by parseServiceNodes(). This is also
+// why PartialClone() skips them, because we know they are blank already so it
+// would be a waste of time to copy them.
 type ServiceNode struct {
 	Node                     string
 	Address                  string
+	TaggedAddresses          map[string]string
 	ServiceID                string
 	ServiceName              string
 	ServiceTags              []string
@@ -274,14 +278,16 @@ type ServiceNode struct {
 	RaftIndex
 }
 
-// Clone returns a clone of the given service node.
-func (s *ServiceNode) Clone() *ServiceNode {
+// PartialClone() returns a clone of the given service node, minus the node-
+// related fields that get filled in later, Address and TaggedAddresses.
+func (s *ServiceNode) PartialClone() *ServiceNode {
 	tags := make([]string, len(s.ServiceTags))
 	copy(tags, s.ServiceTags)
 
 	return &ServiceNode{
-		Node:                     s.Node,
-		Address:                  s.Address,
+		Node: s.Node,
+		// Skip Address, see above.
+		// Skip TaggedAddresses, see above.
 		ServiceID:                s.ServiceID,
 		ServiceName:              s.ServiceName,
 		ServiceTags:              tags,
@@ -343,10 +349,11 @@ func (s *NodeService) IsSame(other *NodeService) bool {
 }
 
 // ToServiceNode converts the given node service to a service node.
-func (s *NodeService) ToServiceNode(node, address string) *ServiceNode {
+func (s *NodeService) ToServiceNode(node string) *ServiceNode {
 	return &ServiceNode{
-		Node:                     node,
-		Address:                  address,
+		Node: node,
+		// Skip Address, see ServiceNode definition.
+		// Skip TaggedAddresses, see ServiceNode definition.
 		ServiceID:                s.ID,
 		ServiceName:              s.Service,
 		ServiceTags:              s.Tags,
@@ -662,7 +669,7 @@ type IndexedSessions struct {
 	QueryMeta
 }
 
-// ACL is used to represent a token and it's rules
+// ACL is used to represent a token and its rules
 type ACL struct {
 	ID    string
 	Name  string
@@ -681,6 +688,21 @@ const (
 	ACLDelete         = "delete"
 )
 
+// IsSame checks if one ACL is the same as another, without looking
+// at the Raft information (that's why we didn't call it IsEqual). This is
+// useful for seeing if an update would be idempotent for all the functional
+// parts of the structure.
+func (a *ACL) IsSame(other *ACL) bool {
+	if a.ID != other.ID ||
+		a.Name != other.Name ||
+		a.Type != other.Type ||
+		a.Rules != other.Rules {
+		return false
+	}
+
+	return true
+}
+
 // ACLRequest is used to create, update or delete an ACL
 type ACLRequest struct {
 	Datacenter string
@@ -692,6 +714,9 @@ type ACLRequest struct {
 func (r *ACLRequest) RequestDatacenter() string {
 	return r.Datacenter
 }
+
+// ACLRequests is a list of ACL change requests.
+type ACLRequests []*ACLRequest
 
 // ACLSpecificRequest is used to request an ACL by ID
 type ACLSpecificRequest struct {
@@ -728,6 +753,17 @@ type ACLPolicy struct {
 	Policy *acl.Policy
 	TTL    time.Duration
 	QueryMeta
+}
+
+// ACLReplicationStatus provides information about the health of the ACL
+// replication system.
+type ACLReplicationStatus struct {
+	Enabled          bool
+	Running          bool
+	SourceDatacenter string
+	ReplicatedIndex  uint64
+	LastSuccess      time.Time
+	LastError        time.Time
 }
 
 // Coordinate stores a node name with its associated network coordinate.

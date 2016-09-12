@@ -68,7 +68,7 @@ type DNSConfig struct {
 	// data. This gives horizontal read scalability since
 	// any Consul server can service the query instead of
 	// only the leader.
-	AllowStale bool `mapstructure:"allow_stale"`
+	AllowStale *bool `mapstructure:"allow_stale"`
 
 	// EnableTruncate is used to enable setting the truncate
 	// flag for UDP DNS queries.  This allows unmodified
@@ -104,6 +104,25 @@ type DNSConfig struct {
 	// whose health checks are in any non-passing state. By
 	// default, only nodes in a critical state are excluded.
 	OnlyPassing bool `mapstructure:"only_passing"`
+
+	// DisableCompression is used to control whether DNS responses are
+	// compressed. In Consul 0.7 this was turned on by default and this
+	// config was added as an opt-out.
+	DisableCompression bool `mapstructure:"disable_compression"`
+
+	// RecursorTimeout specifies the timeout in seconds
+	// for Consul's internal dns client used for recursion.
+	// This value is used for the connection, read and write timeout.
+	// Default: 2s
+	RecursorTimeout    time.Duration `mapstructure:"-"`
+	RecursorTimeoutRaw string        `mapstructure:"recursor_timeout" json:"-"`
+}
+
+// Performance is used to tune the performance of Consul's subsystems.
+type Performance struct {
+	// RaftMultiplier is an integer multiplier used to scale Raft timing
+	// parameters: HeartbeatTimeout, ElectionTimeout, and LeaderLeaseTimeout.
+	RaftMultiplier uint `mapstructure:"raft_multiplier"`
 }
 
 // Telemetry is the telemetry configuration for the server
@@ -147,7 +166,7 @@ type Telemetry struct {
 	// CirconusAPIToken is a valid API Token used to create/manage check. If provided,
 	// metric management is enabled.
 	// Default: none
-	CirconusAPIToken string `mapstructure:"circonus_api_token"`
+	CirconusAPIToken string `mapstructure:"circonus_api_token" json:"-"`
 	// CirconusAPIApp is an app name associated with API token.
 	// Default: "consul"
 	CirconusAPIApp string `mapstructure:"circonus_api_app"`
@@ -200,9 +219,12 @@ type Telemetry struct {
 // Some of this is configurable as CLI flags, but most must
 // be set using a configuration file.
 type Config struct {
-	// DevMode enables a fast-path mode of opertaion to bring up an in-memory
+	// DevMode enables a fast-path mode of operation to bring up an in-memory
 	// server with minimal configuration. Useful for developing Consul.
 	DevMode bool `mapstructure:"-"`
+
+	// Performance is used to tune the performance of Consul's subsystems.
+	Performance Performance `mapstructure:"performance"`
 
 	// Bootstrap is used to bring up the first Consul server, and
 	// permits that node to elect itself leader
@@ -288,8 +310,9 @@ type Config struct {
 	TaggedAddresses map[string]string
 
 	// LeaveOnTerm controls if Serf does a graceful leave when receiving
-	// the TERM signal. Defaults false. This can be changed on reload.
-	LeaveOnTerm bool `mapstructure:"leave_on_terminate"`
+	// the TERM signal. Defaults true on clients, false on servers. This can
+	// be changed on reload.
+	LeaveOnTerm *bool `mapstructure:"leave_on_terminate"`
 
 	// SkipLeaveOnInt controls if Serf skips a graceful leave when
 	// receiving the INT signal. Defaults false on clients, true on
@@ -417,6 +440,14 @@ type Config struct {
 	CheckUpdateInterval    time.Duration `mapstructure:"-"`
 	CheckUpdateIntervalRaw string        `mapstructure:"check_update_interval" json:"-"`
 
+	// CheckReapInterval controls the interval on which we will look for
+	// failed checks and reap their associated services, if so configured.
+	CheckReapInterval time.Duration `mapstructure:"-"`
+
+	// CheckDeregisterIntervalMin is the smallest allowed interval to set
+	// a check's DeregisterCriticalServiceAfter value to.
+	CheckDeregisterIntervalMin time.Duration `mapstructure:"-"`
+
 	// ACLToken is the default token used to make requests if a per-request
 	// token is not provided. If not configured the 'anonymous' token is used.
 	ACLToken string `mapstructure:"acl_token" json:"-"`
@@ -451,6 +482,12 @@ type Config struct {
 	//                    is the default. If the ACL is not in the cache,
 	//                    this acts like deny.
 	ACLDownPolicy string `mapstructure:"acl_down_policy"`
+
+	// ACLReplicationToken is used to fetch ACLs from the ACLDatacenter in
+	// order to replicate them locally. Setting this to a non-empty value
+	// also enables replication. Replication is only available in datacenters
+	// other than the ACLDatacenter.
+	ACLReplicationToken string `mapstructure:"acl_replication_token" json:"-"`
 
 	// Watches are used to monitor various endpoints and to invoke a
 	// handler to act appropriately. These are managed entirely in the
@@ -615,17 +652,21 @@ func DefaultConfig() *Config {
 			Server:  8300,
 		},
 		DNSConfig: DNSConfig{
-			UDPAnswerLimit: 3,
-			MaxStale:       5 * time.Second,
+			AllowStale:      Bool(true),
+			UDPAnswerLimit:  3,
+			MaxStale:        5 * time.Second,
+			RecursorTimeout: 2 * time.Second,
 		},
 		Telemetry: Telemetry{
 			StatsitePrefix: "consul",
 		},
-		SyslogFacility:      "LOCAL0",
-		Protocol:            consul.ProtocolVersion2Compatible,
-		CheckUpdateInterval: 5 * time.Minute,
-		AEInterval:          time.Minute,
-		DisableCoordinates:  false,
+		SyslogFacility:             "LOCAL0",
+		Protocol:                   consul.ProtocolVersion2Compatible,
+		CheckUpdateInterval:        5 * time.Minute,
+		CheckDeregisterIntervalMin: time.Minute,
+		CheckReapInterval:          30 * time.Second,
+		AEInterval:                 time.Minute,
+		DisableCoordinates:         false,
 
 		// SyncCoordinateRateTarget is set based on the rate that we want
 		// the server to handle as an aggregate across the entire cluster.
@@ -807,6 +848,14 @@ func DecodeConfig(r io.Reader) (*Config, error) {
 		result.DNSConfig.MaxStale = dur
 	}
 
+	if raw := result.DNSConfig.RecursorTimeoutRaw; raw != "" {
+		dur, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("RecursorTimeout invalid: %v", err)
+		}
+		result.DNSConfig.RecursorTimeout = dur
+	}
+
 	if len(result.DNSConfig.ServiceTTLRaw) != 0 {
 		if result.DNSConfig.ServiceTTL == nil {
 			result.DNSConfig.ServiceTTL = make(map[string]time.Duration)
@@ -911,6 +960,11 @@ func DecodeConfig(r io.Reader) (*Config, error) {
 		result.AdvertiseAddrs.RPC = addr
 	}
 
+	// Enforce the max Raft multiplier.
+	if result.Performance.RaftMultiplier > consul.MaxRaftMultiplier {
+		return nil, fmt.Errorf("Performance.RaftMultiplier must be <= %d", consul.MaxRaftMultiplier)
+	}
+
 	return &result, nil
 }
 
@@ -964,6 +1018,7 @@ AFTER_FIX:
 
 func FixupCheckType(raw interface{}) error {
 	var ttlKey, intervalKey, timeoutKey string
+	const deregisterKey = "DeregisterCriticalServiceAfter"
 
 	// Handle decoding of time durations
 	rawMap, ok := raw.(map[string]interface{})
@@ -979,12 +1034,15 @@ func FixupCheckType(raw interface{}) error {
 			intervalKey = k
 		case "timeout":
 			timeoutKey = k
+		case "deregister_critical_service_after":
+			rawMap[deregisterKey] = v
+			delete(rawMap, k)
 		case "service_id":
 			rawMap["serviceid"] = v
-			delete(rawMap, "service_id")
+			delete(rawMap, k)
 		case "docker_container_id":
 			rawMap["DockerContainerID"] = v
-			delete(rawMap, "docker_container_id")
+			delete(rawMap, k)
 		}
 	}
 
@@ -1021,6 +1079,17 @@ func FixupCheckType(raw interface{}) error {
 		}
 	}
 
+	if deregister, ok := rawMap[deregisterKey]; ok {
+		timeoutS, ok := deregister.(string)
+		if ok {
+			if dur, err := time.ParseDuration(timeoutS); err != nil {
+				return err
+			} else {
+				rawMap[deregisterKey] = dur
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1048,6 +1117,11 @@ func DecodeCheckDefinition(raw interface{}) (*CheckDefinition, error) {
 // configuration.
 func MergeConfig(a, b *Config) *Config {
 	var result Config = *a
+
+	// Propagate non-default performance settings
+	if b.Performance.RaftMultiplier > 0 {
+		result.Performance.RaftMultiplier = b.Performance.RaftMultiplier
+	}
 
 	// Copy the strings if they're set
 	if b.Bootstrap {
@@ -1113,8 +1187,8 @@ func MergeConfig(a, b *Config) *Config {
 	if b.Server == true {
 		result.Server = b.Server
 	}
-	if b.LeaveOnTerm == true {
-		result.LeaveOnTerm = true
+	if b.LeaveOnTerm != nil {
+		result.LeaveOnTerm = b.LeaveOnTerm
 	}
 	if b.SkipLeaveOnInt != nil {
 		result.SkipLeaveOnInt = b.SkipLeaveOnInt
@@ -1279,8 +1353,8 @@ func MergeConfig(a, b *Config) *Config {
 			result.DNSConfig.ServiceTTL[service] = dur
 		}
 	}
-	if b.DNSConfig.AllowStale {
-		result.DNSConfig.AllowStale = true
+	if b.DNSConfig.AllowStale != nil {
+		result.DNSConfig.AllowStale = b.DNSConfig.AllowStale
 	}
 	if b.DNSConfig.UDPAnswerLimit != 0 {
 		result.DNSConfig.UDPAnswerLimit = b.DNSConfig.UDPAnswerLimit
@@ -1293,6 +1367,12 @@ func MergeConfig(a, b *Config) *Config {
 	}
 	if b.DNSConfig.OnlyPassing {
 		result.DNSConfig.OnlyPassing = true
+	}
+	if b.DNSConfig.DisableCompression {
+		result.DNSConfig.DisableCompression = true
+	}
+	if b.DNSConfig.RecursorTimeout != 0 {
+		result.DNSConfig.RecursorTimeout = b.DNSConfig.RecursorTimeout
 	}
 	if b.CheckUpdateIntervalRaw != "" || b.CheckUpdateInterval != 0 {
 		result.CheckUpdateInterval = b.CheckUpdateInterval
@@ -1318,6 +1398,9 @@ func MergeConfig(a, b *Config) *Config {
 	}
 	if b.ACLDefaultPolicy != "" {
 		result.ACLDefaultPolicy = b.ACLDefaultPolicy
+	}
+	if b.ACLReplicationToken != "" {
+		result.ACLReplicationToken = b.ACLReplicationToken
 	}
 	if len(b.Watches) != 0 {
 		result.Watches = append(result.Watches, b.Watches...)
