@@ -289,11 +289,64 @@ func (l *localState) UpdateCheck(checkID types.CheckID, status, output string) {
 		return
 	}
 
+	l.checkChanged(check)
+
 	// Update status and mark out of sync
 	check.Status = status
 	check.Output = output
 	l.checkStatus[checkID] = syncStatus{inSync: false}
 	l.changeMade()
+}
+
+func (l *localState) checkChanged(check *structs.HealthCheck) {
+	if len(check.EntityID) == 0 {
+		return
+	}
+	parts := strings.Split(check.EntityID, ":")
+	if len(parts) == 0 {
+		return
+	}
+	switch parts[0] {
+	case "tag":
+		if len(parts) != 3 {
+			return
+		}
+		serviceID, tag := parts[1], parts[2]
+		service, found := l.services[serviceID]
+		if !found {
+			return
+		}
+		var inSync bool
+		if check.Status == structs.HealthPassing {
+			service.Tags, inSync = addUniqueString(service.Tags, tag)
+		} else {
+			service.Tags, inSync = removeString(service.Tags, tag)
+		}
+		l.serviceStatus[serviceID] = syncStatus{inSync: inSync}
+	}
+}
+
+func addUniqueString(arr []string, elem string) ([]string, bool) {
+	for _, s := range arr {
+		if s == elem {
+			return arr, true
+		}
+	}
+	arr = append(arr, elem)
+	return arr, false
+}
+
+func removeString(arr []string, elem string) ([]string, bool) {
+	for i, s := range arr {
+		if s == elem {
+			newArr := arr[:i]
+			if i < len(arr)-1 {
+				newArr = append(newArr, arr[:i+1]...)
+			}
+			return newArr, false
+		}
+	}
+	return arr, true
 }
 
 // Checks returns the locally registered checks that the

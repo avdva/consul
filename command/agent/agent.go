@@ -801,15 +801,20 @@ func (a *Agent) purgeCheck(checkID types.CheckID) error {
 // AddService is used to add a service entry.
 // This entry is persistent and the agent will make a best effort to
 // ensure it is registered
-func (a *Agent) AddService(service *structs.NodeService, chkTypes CheckTypes, persist bool, token string) error {
+func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckTypes, tagsChecks []*DynamicTag, persist bool, token string) error {
 	if service.Service == "" {
 		return fmt.Errorf("Service name missing")
 	}
 	if service.ID == "" && service.Service != "" {
 		service.ID = service.Service
 	}
-	for _, check := range chkTypes {
+	for _, check := range serviceChecks {
 		if !check.Valid() {
+			return fmt.Errorf("Check type is not valid")
+		}
+	}
+	for _, check := range tagsChecks {
+		if !check.Check.Valid() {
 			return fmt.Errorf("Check type is not valid")
 		}
 	}
@@ -824,6 +829,14 @@ func (a *Agent) AddService(service *structs.NodeService, chkTypes CheckTypes, pe
 	// Warn if any tags are incompatible with DNS
 	for _, tag := range service.Tags {
 		if !dnsNameRe.MatchString(tag) {
+			a.logger.Printf("[WARN] Service tag %q will not be discoverable "+
+				"via DNS due to invalid characters. Valid characters include "+
+				"all alpha-numerics and dashes.", tag)
+		}
+	}
+
+	for _, tag := range tagsChecks {
+		if !dnsNameRe.MatchString(tag.Name) {
 			a.logger.Printf("[WARN] Service tag %q will not be discoverable "+
 				"via DNS due to invalid characters. Valid characters include "+
 				"all alpha-numerics and dashes.", tag)
@@ -850,9 +863,9 @@ func (a *Agent) AddService(service *structs.NodeService, chkTypes CheckTypes, pe
 	}
 
 	// Create an associated health check
-	for i, chkType := range chkTypes {
+	for i, chkType := range serviceChecks {
 		checkID := fmt.Sprintf("service:%s", service.ID)
-		if len(chkTypes) > 1 {
+		if len(serviceChecks) > 1 {
 			checkID += fmt.Sprintf(":%d", i+1)
 		}
 		check := &structs.HealthCheck{
@@ -871,6 +884,29 @@ func (a *Agent) AddService(service *structs.NodeService, chkTypes CheckTypes, pe
 			return err
 		}
 	}
+
+	for i, chkType := range tagsChecks {
+		checkID := fmt.Sprintf("tag:%s:%s", service.ID, chkType.Name)
+		if len(tagsChecks) > 1 {
+			checkID += fmt.Sprintf(":%d", i+1)
+		}
+		check := &structs.HealthCheck{
+			Node:        a.config.NodeName,
+			CheckID:     types.CheckID(checkID),
+			Name:        fmt.Sprintf("Service '%s' tag '%s' check", service.Service, chkType.Name),
+			Status:      structs.HealthCritical,
+			Notes:       chkType.Check.Notes,
+			ServiceName: service.Service,
+			EntityID:    fmt.Sprintf("tag:%s:%s", service.ID, chkType.Name),
+		}
+		if chkType.Check.Status != "" {
+			check.Status = chkType.Check.Status
+		}
+		if err := a.AddCheck(check, &chkType.Check, persist, token); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1303,8 +1339,9 @@ func (a *Agent) loadServices(conf *Config) error {
 	// Register the services from config
 	for _, service := range conf.Services {
 		ns := service.NodeService()
-		chkTypes := service.CheckTypes()
-		if err := a.AddService(ns, chkTypes, false, service.Token); err != nil {
+		serviceChecks := service.CheckTypes()
+		tagsChecks := service.TagsCheckTypes()
+		if err := a.AddService(ns, serviceChecks, tagsChecks, false, service.Token); err != nil {
 			return fmt.Errorf("Failed to register service '%s': %v", service.ID, err)
 		}
 	}
@@ -1359,7 +1396,7 @@ func (a *Agent) loadServices(conf *Config) error {
 		} else {
 			a.logger.Printf("[DEBUG] agent: restored service definition %q from %q",
 				serviceID, file)
-			if err := a.AddService(p.Service, nil, false, p.Token); err != nil {
+			if err := a.AddService(p.Service, nil, nil, false, p.Token); err != nil {
 				return fmt.Errorf("failed adding service %q: %s", serviceID, err)
 			}
 		}

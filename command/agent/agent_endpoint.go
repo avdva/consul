@@ -223,36 +223,49 @@ func (s *HTTPServer) AgentCheckUpdate(resp http.ResponseWriter, req *http.Reques
 	return nil, nil
 }
 
-func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
-	var args ServiceDefinition
-	// Fixup the type decode of TTL or Interval if a check if provided
-	decodeCB := func(raw interface{}) error {
-		rawMap, ok := raw.(map[string]interface{})
-		if !ok {
-			return nil
-		}
 
-		for k, v := range rawMap {
-			switch strings.ToLower(k) {
-			case "check":
-				if err := FixupCheckType(v); err != nil {
+// decodeServiceDefCB fixups the type decode of TTL or Interval if a check if provided.
+func decodeServiceDefCB(raw interface{}) error {
+	rawMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for k, v := range rawMap {
+		switch strings.ToLower(k) {
+		case "check":
+			if err := FixupCheckType(v); err != nil {
+				return err
+			}
+		case "checks":
+			chkTypes, ok := v.([]interface{})
+			if !ok {
+				continue
+			}
+			for _, chkType := range chkTypes {
+				if err := FixupCheckType(chkType); err != nil {
 					return err
 				}
-			case "checks":
-				chkTypes, ok := v.([]interface{})
-				if !ok {
-					continue
-				}
-				for _, chkType := range chkTypes {
-					if err := FixupCheckType(chkType); err != nil {
-						return err
-					}
+			}
+		case "dynamictags":
+			tagDefs, ok := v.([]interface{})
+			if !ok {
+				continue
+			}
+			for _, tagDef := range tagDefs {
+				if err := decodeServiceDefCB(tagDef); err != nil {
+					return err
 				}
 			}
 		}
-		return nil
 	}
-	if err := decodeBody(req, &args, decodeCB); err != nil {
+	return nil
+}
+
+func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+	var args ServiceDefinition
+
+	if err := decodeBody(req, &args, decodeServiceDefCB, s.logger); err != nil {
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf("Request decode failed: %v", err)))
 		return nil, nil
@@ -269,14 +282,26 @@ func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Re
 	ns := args.NodeService()
 
 	// Verify the check type
-	chkTypes := args.CheckTypes()
-	for _, check := range chkTypes {
+	for _, check := range args.CheckTypes() {
 		if check.Status != "" && !structs.ValidStatus(check.Status) {
+			resp.WriteHeader(400)
+			resp.Write([]byte("Status for checks must 'passing', 'warning', 'critical', 'unknown'"))
+			return nil, nil
+		}
+		if !check.Valid() {
+			resp.WriteHeader(400)
+			resp.Write([]byte(invalidCheckMessage))
+			return nil, nil
+		}
+	}
+
+	for _, check := range args.TagsCheckTypes() {
+		if check.Check.Status != "" && !structs.ValidStatus(check.Check.Status) {
 			resp.WriteHeader(400)
 			resp.Write([]byte("Status for checks must 'passing', 'warning', 'critical'"))
 			return nil, nil
 		}
-		if !check.Valid() {
+		if !check.Check.Valid() {
 			resp.WriteHeader(400)
 			resp.Write([]byte(invalidCheckMessage))
 			return nil, nil
@@ -288,7 +313,7 @@ func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Re
 	s.parseToken(req, &token)
 
 	// Add the check
-	if err := s.agent.AddService(ns, chkTypes, true, token); err != nil {
+	if err := s.agent.AddService(ns, args.CheckTypes(), args.TagsCheckTypes(), true, token); err != nil {
 		return nil, err
 	}
 	s.syncChanges()

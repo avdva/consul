@@ -43,12 +43,13 @@ type AgentMember struct {
 
 // AgentServiceRegistration is used to register a new service
 type AgentServiceRegistration struct {
-	ID                string   `json:",omitempty"`
-	Name              string   `json:",omitempty"`
-	Tags              []string `json:",omitempty"`
-	Port              int      `json:",omitempty"`
-	Address           string   `json:",omitempty"`
-	EnableTagOverride bool     `json:",omitempty"`
+	ID                string                    `json:",omitempty"`
+	Name              string                    `json:",omitempty"`
+	Tags              []string                  `json:",omitempty"`
+	DynamicTags       []*DynamicTagRegistration `json:",omitempty"`
+	Port              int                       `json:",omitempty"`
+	Address           string                    `json:",omitempty"`
+	EnableTagOverride bool                      `json:",omitempty"`
 	Check             *AgentServiceCheck
 	Checks            AgentServiceChecks
 }
@@ -60,6 +61,12 @@ type AgentCheckRegistration struct {
 	Notes     string `json:",omitempty"`
 	ServiceID string `json:",omitempty"`
 	AgentServiceCheck
+}
+
+// DynamicTagRegistration is used to define a tag, that depends on some check.
+type DynamicTagRegistration struct {
+	Name string `json:",omitempty"`
+	Check AgentServiceCheck
 }
 
 // AgentServiceCheck is used to define a node or service level check
