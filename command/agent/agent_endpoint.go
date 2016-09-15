@@ -223,7 +223,6 @@ func (s *HTTPServer) AgentCheckUpdate(resp http.ResponseWriter, req *http.Reques
 	return nil, nil
 }
 
-
 // decodeServiceDefCB fixups the type decode of TTL or Interval if a check if provided.
 func decodeServiceDefCB(raw interface{}) error {
 	rawMap, ok := raw.(map[string]interface{})
@@ -237,23 +236,13 @@ func decodeServiceDefCB(raw interface{}) error {
 			if err := FixupCheckType(v); err != nil {
 				return err
 			}
-		case "checks":
+		case "checks", "dynamictags":
 			chkTypes, ok := v.([]interface{})
 			if !ok {
 				continue
 			}
 			for _, chkType := range chkTypes {
 				if err := FixupCheckType(chkType); err != nil {
-					return err
-				}
-			}
-		case "dynamictags":
-			tagDefs, ok := v.([]interface{})
-			if !ok {
-				continue
-			}
-			for _, tagDef := range tagDefs {
-				if err := decodeServiceDefCB(tagDef); err != nil {
 					return err
 				}
 			}
@@ -265,7 +254,7 @@ func decodeServiceDefCB(raw interface{}) error {
 func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
 	var args ServiceDefinition
 
-	if err := decodeBody(req, &args, decodeServiceDefCB, s.logger); err != nil {
+	if err := decodeBody(req, &args, decodeServiceDefCB); err != nil {
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf("Request decode failed: %v", err)))
 		return nil, nil
@@ -282,26 +271,13 @@ func (s *HTTPServer) AgentRegisterService(resp http.ResponseWriter, req *http.Re
 	ns := args.NodeService()
 
 	// Verify the check type
-	for _, check := range args.CheckTypes() {
+	for _, check := range append(args.CheckTypes(), args.TagsCheckTypes().CheckTypes()...) {
 		if check.Status != "" && !structs.ValidStatus(check.Status) {
 			resp.WriteHeader(400)
 			resp.Write([]byte("Status for checks must 'passing', 'warning', 'critical', 'unknown'"))
 			return nil, nil
 		}
 		if !check.Valid() {
-			resp.WriteHeader(400)
-			resp.Write([]byte(invalidCheckMessage))
-			return nil, nil
-		}
-	}
-
-	for _, check := range args.TagsCheckTypes() {
-		if check.Check.Status != "" && !structs.ValidStatus(check.Check.Status) {
-			resp.WriteHeader(400)
-			resp.Write([]byte("Status for checks must 'passing', 'warning', 'critical'"))
-			return nil, nil
-		}
-		if !check.Check.Valid() {
 			resp.WriteHeader(400)
 			resp.Write([]byte(invalidCheckMessage))
 			return nil, nil

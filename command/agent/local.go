@@ -289,12 +289,11 @@ func (l *localState) UpdateCheck(checkID types.CheckID, status, output string) {
 		return
 	}
 
-	l.checkChanged(check)
-
 	// Update status and mark out of sync
 	check.Status = status
 	check.Output = output
 	l.checkStatus[checkID] = syncStatus{inSync: false}
+	l.checkChanged(check)
 	l.changeMade()
 }
 

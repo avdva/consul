@@ -10,7 +10,7 @@ type ServiceDefinition struct {
 	ID                string
 	Name              string
 	Tags              []string
-	DynamicTags       []*DynamicTag
+	DynamicTags       DynamicTags
 	Address           string
 	Port              int
 	Check             CheckType
@@ -44,10 +44,10 @@ func (s *ServiceDefinition) CheckTypes() (checks CheckTypes) {
 	return
 }
 
-func (s *ServiceDefinition) TagsCheckTypes() (checks []*DynamicTag) {
+func (s *ServiceDefinition) TagsCheckTypes() (tags DynamicTags) {
 	for _, check := range s.DynamicTags {
-		if check.Check.Valid() {
-			checks = append(checks, check)
+		if check.Valid() {
+			tags = append(tags, check)
 		}
 	}
 	return
@@ -55,8 +55,24 @@ func (s *ServiceDefinition) TagsCheckTypes() (checks []*DynamicTag) {
 
 // DynamicTag is used to JSON decode the Dynamic tag definitions
 type DynamicTag struct {
-	Name  string
-	Check CheckType
+	Name      string
+	CheckType `mapstructure:",squash"`
+}
+
+type DynamicTags []*DynamicTag
+
+func (d DynamicTags) Names() (names []string) {
+	for _, tag := range d {
+		names = append(names, tag.Name)
+	}
+	return
+}
+
+func (d DynamicTags) CheckTypes() (checks CheckTypes) {
+	for _, tag := range d {
+		checks = append(checks, &tag.CheckType)
+	}
+	return
 }
 
 // CheckDefinition is used to JSON decode the Check definitions

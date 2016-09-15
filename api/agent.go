@@ -66,7 +66,7 @@ type AgentCheckRegistration struct {
 // DynamicTagRegistration is used to define a tag, that depends on some check.
 type DynamicTagRegistration struct {
 	Name string `json:",omitempty"`
-	Check AgentServiceCheck
+	AgentServiceCheck
 }
 
 // AgentServiceCheck is used to define a node or service level check
