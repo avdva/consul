@@ -857,10 +857,7 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 		} else {
 			hc.Status = structs.HealthCritical
 		}
-		if err := a.AddCheck(hc, chkType, persist, token); err != nil {
-			return err
-		}
-		return nil
+		return a.AddCheck(hc, chkType, persist, token)
 	}
 
 	// Create an associated health check
@@ -881,13 +878,14 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 		}
 	}
 
+	// Create health checks for tags
 	for _, chkType := range tagsChecks {
 		checkID := fmt.Sprintf("tag:%s:%s", service.ID, chkType.Name)
 		check := &structs.HealthCheck{
 			CheckID:  types.CheckID(checkID),
 			Name:     fmt.Sprintf("Service '%s' tag '%s' check", service.Service, chkType.Name),
 			Notes:    chkType.Notes,
-			EntityID: fmt.Sprintf("tag:%s:%s", service.ID, chkType.Name),
+			EntityID: checkID,
 		}
 		if err := addCheck(check, &chkType.CheckType); err != nil {
 			return err
