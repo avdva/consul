@@ -886,6 +886,12 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 			Name:     fmt.Sprintf("Service '%s' tag '%s' check", service.Service, chkType.Name),
 			Notes:    chkType.Notes,
 			EntityID: checkID,
+			// FIXME(avd)
+			// we can't leave this field empty, as this would mean 'node check'.
+			// we can't bind the check to the service as we don't want the service's state
+			// to depend on this check.
+			// for now, we use 'fake' service.
+			ServiceID: checkID,
 		}
 		if err := addCheck(check, &chkType.CheckType); err != nil {
 			return err
@@ -922,13 +928,13 @@ func (a *Agent) RemoveService(serviceID string, persist bool) error {
 
 	// Deregister any associated health checks
 	for checkID, health := range a.state.Checks() {
-		if len(health.ServiceID) > 0 && health.ServiceID != serviceID {
-			continue
-		} else {
+		if len(health.EntityID) > 0 {
 			parts := strings.Split(health.EntityID, ":")
 			if len(parts) != 3 || parts[1] != serviceID {
 				continue
 			}
+		} else if health.ServiceID != serviceID {
+			continue
 		}
 		if err := a.RemoveCheck(checkID, persist); err != nil {
 			return err
@@ -951,7 +957,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *CheckType, persist
 		return fmt.Errorf("Check type is not valid")
 	}
 
-	if check.ServiceID != "" {
+	if check.ServiceID != "" && check.EntityID == "" {
 		svc, ok := a.state.Services()[check.ServiceID]
 		if !ok {
 			return fmt.Errorf("ServiceID %q does not exist", check.ServiceID)

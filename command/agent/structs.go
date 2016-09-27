@@ -35,7 +35,9 @@ func (s *ServiceDefinition) NodeService() *structs.NodeService {
 }
 
 func (s *ServiceDefinition) CheckTypes() (checks CheckTypes) {
-	checks = append(checks, &s.Check)
+	if s.Check.Valid() {
+		checks = append(checks, &s.Check)
+	}
 	for _, check := range s.Checks {
 		if check.Valid() {
 			checks = append(checks, check)
