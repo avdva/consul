@@ -840,6 +840,8 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 	snap := a.snapshotCheckState()
 	defer a.restoreCheckState(snap)
 
+	a.clearTagChecks(service.ID)
+
 	// Add the service
 	a.state.AddService(service, token)
 
@@ -886,7 +888,7 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 			Name:     fmt.Sprintf("Service '%s' tag '%s' check", service.Service, chkType.Name),
 			Notes:    chkType.Notes,
 			EntityID: checkID,
-			// FIXME(avd)
+			// FIXME(avd):
 			// we can't leave this field empty, as this would mean 'node check'.
 			// we can't bind the check to the service as we don't want the service's state
 			// to depend on this check.
@@ -899,6 +901,17 @@ func (a *Agent) AddService(service *structs.NodeService, serviceChecks CheckType
 	}
 
 	return nil
+}
+
+func (a *Agent) clearTagChecks(serviceID string) {
+	for checkID, health := range a.state.Checks() {
+		if len(health.EntityID) > 0 {
+			parts := strings.Split(health.EntityID, ":")
+			if parts[0] == "tag" && parts[1] == serviceID {
+				a.RemoveCheck(checkID, true)
+			}
+		}
+	}
 }
 
 // RemoveService is used to remove a service entry.

@@ -225,6 +225,7 @@ func (l *localState) AddCheck(check *structs.HealthCheck, token string) {
 	l.checkStatus[check.CheckID] = syncStatus{}
 	l.checkTokens[check.CheckID] = token
 	delete(l.checkCriticalTime, check.CheckID)
+	l.checkChanged(check)
 	l.changeMade()
 }
 
@@ -234,6 +235,10 @@ func (l *localState) RemoveCheck(checkID types.CheckID) {
 	l.Lock()
 	defer l.Unlock()
 
+	if check, ok := l.checks[checkID]; ok {
+		check.Status = structs.HealthCritical
+		l.checkChanged(check)
+	}
 	delete(l.checks, checkID)
 	delete(l.checkTokens, checkID)
 	delete(l.checkCriticalTime, checkID)
