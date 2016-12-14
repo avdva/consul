@@ -26,8 +26,7 @@ const (
 // syncStatus is used to represent the difference between
 // the local and remote state, and if action needs to be taken
 type syncStatus struct {
-	remoteDelete bool // Should this be deleted from the server
-	inSync       bool // Is this in sync with the server
+	inSync bool // Is this in sync with the server
 }
 
 // localState is used to represent the node's services,
@@ -171,14 +170,20 @@ func (l *localState) AddService(service *structs.NodeService, token string) {
 
 // RemoveService is used to remove a service entry from the local state.
 // The agent will make a best effort to ensure it is deregistered
-func (l *localState) RemoveService(serviceID string) {
+func (l *localState) RemoveService(serviceID string) error {
 	l.Lock()
 	defer l.Unlock()
 
-	delete(l.services, serviceID)
-	delete(l.serviceTokens, serviceID)
-	l.serviceStatus[serviceID] = syncStatus{remoteDelete: true}
-	l.changeMade()
+	if _, ok := l.services[serviceID]; ok {
+		delete(l.services, serviceID)
+		delete(l.serviceTokens, serviceID)
+		l.serviceStatus[serviceID] = syncStatus{inSync: false}
+		l.changeMade()
+	} else {
+		return fmt.Errorf("Service does not exist")
+	}
+
+	return nil
 }
 
 // Services returns the locally registered services that the
@@ -242,7 +247,7 @@ func (l *localState) RemoveCheck(checkID types.CheckID) {
 	delete(l.checks, checkID)
 	delete(l.checkTokens, checkID)
 	delete(l.checkCriticalTime, checkID)
-	l.checkStatus[checkID] = syncStatus{remoteDelete: true}
+	l.checkStatus[checkID] = syncStatus{inSync: false}
 	l.changeMade()
 }
 
@@ -452,7 +457,7 @@ func (l *localState) setSyncState() error {
 	req := structs.NodeSpecificRequest{
 		Datacenter:   l.config.Datacenter,
 		Node:         l.config.NodeName,
-		QueryOptions: structs.QueryOptions{Token: l.config.ACLToken},
+		QueryOptions: structs.QueryOptions{Token: l.config.GetTokenForAgent()},
 	}
 	var out1 structs.IndexedNodeServices
 	var out2 structs.IndexedHealthChecks
@@ -491,7 +496,7 @@ func (l *localState) setSyncState() error {
 		// If we don't have the service locally, deregister it
 		existing, ok := l.services[id]
 		if !ok {
-			l.serviceStatus[id] = syncStatus{remoteDelete: true}
+			l.serviceStatus[id] = syncStatus{inSync: false}
 			continue
 		}
 
@@ -529,7 +534,7 @@ func (l *localState) setSyncState() error {
 			if id == consul.SerfCheckID {
 				continue
 			}
-			l.checkStatus[id] = syncStatus{remoteDelete: true}
+			l.checkStatus[id] = syncStatus{inSync: false}
 			continue
 		}
 
@@ -578,7 +583,7 @@ func (l *localState) syncChanges() error {
 
 	// Sync the services
 	for id, status := range l.serviceStatus {
-		if status.remoteDelete {
+		if _, ok := l.services[id]; !ok {
 			if err := l.deleteService(id); err != nil {
 				return err
 			}
@@ -593,7 +598,7 @@ func (l *localState) syncChanges() error {
 
 	// Sync the checks
 	for id, status := range l.checkStatus {
-		if status.remoteDelete {
+		if _, ok := l.checks[id]; !ok {
 			if err := l.deleteCheck(id); err != nil {
 				return err
 			}
@@ -761,7 +766,7 @@ func (l *localState) syncNodeInfo() error {
 		Node:            l.config.NodeName,
 		Address:         l.config.AdvertiseAddr,
 		TaggedAddresses: l.config.TaggedAddresses,
-		WriteRequest:    structs.WriteRequest{Token: l.config.ACLToken},
+		WriteRequest:    structs.WriteRequest{Token: l.config.GetTokenForAgent()},
 	}
 	var out struct{}
 	err := l.iface.RPC("Catalog.Register", &req, &out)
